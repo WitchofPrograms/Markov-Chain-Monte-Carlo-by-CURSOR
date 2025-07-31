@@ -195,6 +195,39 @@ def plot_mcmc_results(samples, dist_name, y_value, burn_in=0):
     print(f"Min: {np.min(samples_clean):.4f}")
     print(f"Max: {np.max(samples_clean):.4f}")
 
+def auto_tune_sigma(dist, y, x0, steps, target_min=0.25, target_max=0.35, max_iter=20, verbose=True, **kwargs):
+    """
+    Acceptance rate'i hedef aralığa getirmek için sigma'yı otomatik ayarlar.
+    """
+    sigma = 0.5
+    best_sigma = sigma
+    best_acc = 0
+    found = False
+    tried_sigmas = []
+    for i in range(max_iter):
+        samples, acc_rate = metropolis_hastings_mcmc(dist, y, x0, sigma, steps, verbose=False, **kwargs)
+        tried_sigmas.append((sigma, acc_rate))
+        if verbose:
+            print(f"Deneme {i+1}: sigma={sigma:.4f}, acceptance rate={acc_rate:.3f}")
+        if target_min <= acc_rate <= target_max:
+            found = True
+            best_sigma = sigma
+            best_acc = acc_rate
+            break
+        # Sigma'yı acceptance rate'e göre ayarla
+        if acc_rate < target_min:
+            sigma *= 0.7  # acceptance düşükse sigma'yı küçült
+        else:
+            sigma *= 1.3  # acceptance yüksekse sigma'yı büyüt
+        sigma = max(0.01, min(sigma, 10.0))
+    if not found:
+        # En yakın değeri bul
+        best_sigma, best_acc = min(tried_sigmas, key=lambda x: abs((target_min+target_max)/2 - x[1]))
+        print(f"Hedef aralığa ulaşılamadı. En yakın: sigma={best_sigma:.4f}, acceptance rate={best_acc:.3f}")
+    else:
+        print(f"Uygun sigma bulundu: sigma={best_sigma:.4f}, acceptance rate={best_acc:.3f}")
+    return best_sigma, best_acc
+
 # --- Example usage and testing ---
 if __name__ == "__main__":
     import argparse
@@ -211,11 +244,28 @@ if __name__ == "__main__":
     parser.add_argument('--b', type=float, default=2.0, help='Beta/Bernoulli prior b')
     parser.add_argument('--alpha', type=float, default=1.0, help='Poisson prior alpha')
     parser.add_argument('--beta_param', type=float, default=1.0, help='Poisson prior beta')
+    parser.add_argument('--auto_sigma', action='store_true', help='Acceptance rate için sigma otomatik ayarla')
     args = parser.parse_args()
 
     print(f"Running MCMC for {args.dist} distribution...")
     print(f"Parameters: y={args.y}, x0={args.x0}, sigma={args.sigma}, steps={args.steps}")
     
+    if args.auto_sigma:
+        # Otomatik sigma ayarı
+        extra_kwargs = {}
+        if args.dist == 'bernoulli':
+            extra_kwargs = dict(a=args.a, b=args.b)
+        elif args.dist == 'beta':
+            extra_kwargs = dict(b=args.b)
+        elif args.dist == 'poisson':
+            extra_kwargs = dict(alpha=args.alpha, beta_param=args.beta_param)
+        best_sigma, best_acc = auto_tune_sigma(
+            args.dist, args.y if args.dist != 'bernoulli' and args.dist != 'poisson' else int(args.y),
+            args.x0, args.steps, verbose=True, **extra_kwargs
+        )
+        print(f"Kullanılacak sigma: {best_sigma:.4f} (acceptance rate: {best_acc:.3f})")
+        args.sigma = best_sigma
+
     # Run MCMC
     if args.dist == 'gaussian':
         samples, acc_rate = metropolis_hastings_mcmc('gaussian', args.y, args.x0, args.sigma, args.steps, args.verbose)
